@@ -1,5 +1,6 @@
 import {
   GetObjectCommand,
+  HeadBucketCommand,
   ListObjectsV2Command,
   S3Client
 } from "@aws-sdk/client-s3";
@@ -47,13 +48,14 @@ export class S3Storage implements StorageAdminClient {
   async listObjects(input: {
     prefix: string;
     continuationToken?: string;
+    bucket?: string;
   }): Promise<ObjectListResult> {
     const prefix = normalizePrefix(input.prefix);
 
     try {
       const response = await this.client.send(
         new ListObjectsV2Command({
-          Bucket: this.bucket,
+          Bucket: input.bucket ?? this.bucket,
           Delimiter: "/",
           Prefix: prefix,
           ContinuationToken: input.continuationToken
@@ -92,6 +94,7 @@ export class S3Storage implements StorageAdminClient {
   async createDownloadUrl(input: {
     key: string;
     expiresInSeconds: number;
+    bucket?: string;
   }): Promise<string> {
     const key = normalizeObjectKey(input.key);
 
@@ -99,7 +102,7 @@ export class S3Storage implements StorageAdminClient {
       return await getSignedUrl(
         this.client,
         new GetObjectCommand({
-          Bucket: this.bucket,
+          Bucket: input.bucket ?? this.bucket,
           Key: key,
           ResponseContentDisposition: `attachment; filename="${encodeURIComponent(
             basenameFromKey(key)
@@ -113,12 +116,26 @@ export class S3Storage implements StorageAdminClient {
     }
   }
 
-  async prefixExists(inputPrefix: string): Promise<boolean> {
+  async bucketExists(bucket: string): Promise<boolean> {
+    try {
+      await this.client.send(new HeadBucketCommand({ Bucket: bucket }));
+      return true;
+    } catch (error) {
+      const awsError = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null;
+      if (awsError?.name === "NoSuchBucket" || awsError?.$metadata?.httpStatusCode === 404) {
+        return false;
+      }
+      console.error("Failed to validate S3 bucket", summarizeAwsError(error));
+      throw new Error("S3_BUCKET_CHECK_FAILED");
+    }
+  }
+
+  async prefixExists(inputPrefix: string, bucket?: string): Promise<boolean> {
     const prefix = normalizePrefix(inputPrefix);
     try {
       const response = await this.client.send(
         new ListObjectsV2Command({
-          Bucket: this.bucket,
+          Bucket: bucket ?? this.bucket,
           Prefix: prefix,
           MaxKeys: 1
         })

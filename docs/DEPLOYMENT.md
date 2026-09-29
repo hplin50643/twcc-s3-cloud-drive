@@ -14,7 +14,9 @@ docker compose up -d
 
 `db:init` 會建立 schema 與第一位管理員。資料庫已有任何帳號時，初始化會拒絕執行；後續帳號請使用網頁管理介面。
 
-管理員可省略 `--s3-prefix` 以取得整個 bucket。非空白 prefix 必須至少包含一個 object 或 folder marker，否則初始化失敗。
+第一位管理員使用 `.env` 的 `S3_BUCKET`，後續可從帳號管理設定個別 bucket。管理員可省略 `--s3-prefix` 以取得整個所選 bucket。非空白 prefix 必須至少包含一個 object 或 folder marker，否則初始化失敗。
+
+`.env` 的 `S3_BUCKET` 仍為必要設定，作為新增帳號的預填值及未設定個別 bucket 的帳號預設值。各帳號的 bucket 必須位於相同的 `S3_ENDPOINT`，並可由共用的 S3 金鑰存取；金鑰需具備驗證 bucket、列出指定 prefix 與下載 object 的權限。
 
 ## Runtime Layout
 
@@ -73,6 +75,8 @@ docker compose ps
 
 Backend 每次啟動會讀取 `schema_migrations` 並套用缺少的 migration。請先保留資料庫備份，再升級程式。
 
+支援個別帳號 bucket 的版本會自動新增帳號的 bucket 欄位。既有帳號未儲存個別 bucket 設定前會沿用 `.env` 的 `S3_BUCKET`，無須手動修改資料庫。明確儲存 bucket 後，日後修改 `.env` 的預設值不會變更該帳號的 bucket。
+
 ## Troubleshooting
 
 ```bash
@@ -83,7 +87,8 @@ docker compose config
 ```
 
 - `initialized: false`：尚未執行 `db:init`。
+- Bucket 驗證失敗：檢查帳號設定的 bucket 是否存在，以及共用 endpoint、region、金鑰與 bucket 權限。權限不足或上游錯誤不代表 bucket 不存在。
 - `Unable to validate the storage path`：檢查 endpoint、bucket、region、金鑰及 S3 權限。
-- `The storage path does not exist`：prefix 下沒有 object 或 folder marker。
+- `The storage path does not exist`：該帳號所選 bucket 的 prefix 下沒有 object 或 folder marker。
 - 登入後仍回登入頁：確認 `COOKIE_SECURE` 與實際 HTTP/HTTPS 模式一致。
 - `database is locked`：確認只有同一個 compose deployment 使用該 bind mount，並檢查 `data/` 權限。

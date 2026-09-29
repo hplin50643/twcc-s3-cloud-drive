@@ -1,6 +1,6 @@
 # TWCC S3 Cloud Drive
 
-前後端分離的 S3-compatible 檔案瀏覽與下載系統。React 前端只呼叫 REST API；Express 後端保管 S3 金鑰、驗證帳號權限並產生短效 presigned URL。系統支援多帳號、管理員介面、每帳號 S3 路徑、批量下載與稽核紀錄。
+前後端分離的 S3-compatible 檔案瀏覽與下載系統。React 前端只呼叫 REST API；Express 後端保管 S3 金鑰、驗證帳號權限並產生短效 presigned URL。系統支援多帳號、管理員介面、每帳號 S3 bucket 與路徑、批量下載與稽核紀錄。
 
 ![TWCC S3 Cloud Drive 登入畫面](docs/images/login-screen.png)
 
@@ -8,7 +8,8 @@
 
 - Argon2id 密碼雜湊與 SQLite 帳號資料庫
 - `admin` / `user` 角色及最後管理員保護
-- 管理員可新增、刪除、重設密碼、設定每帳號 S3 prefix 及維護帳號備註
+- 管理員可新增、刪除、重設密碼、設定每帳號 S3 bucket / prefix 及維護帳號備註
+- 新增帳號預填 `.env` 的 `S3_BUCKET`，可分別驗證 bucket 與其內的路徑是否存在
 - 使用者可更換自己的密碼，所有既有 Session 會立即失效
 - 登入、下載連結簽發及管理操作稽核，預設保留 180 天
 - 資料夾瀏覽、breadcrumb、搜尋、修改時間由新到舊排序
@@ -27,7 +28,7 @@ Browser
                  -> S3-compatible endpoint
 ```
 
-S3 Access Key、Secret Key、bucket 及 Session secret 只存在部署主機的 `.env`。SQLite 與 `.env` 均不會提交 GitHub。
+S3 Access Key、Secret Key 及 Session secret 只存在部署主機的 `.env`。`.env` 的 `S3_BUCKET` 提供預設 bucket，各帳號另可在 SQLite 保存自己的 bucket 設定。SQLite 與 `.env` 均不會提交 GitHub。
 
 ## Quick Start
 
@@ -72,7 +73,7 @@ docker compose ps
 | `LOGIN_RATE_LIMIT_PER_IP` | `30` | 每 IP 窗口內失敗上限 |
 | `AUDIT_RETENTION_DAYS` | `180` | 所有稽核紀錄保留天數 |
 | `S3_ENDPOINT` | required | S3-compatible HTTPS endpoint |
-| `S3_BUCKET` | required | 固定 bucket |
+| `S3_BUCKET` | required | 帳號未另行設定時使用的預設 bucket；新增帳號表單的預填值 |
 | `S3_REGION` | `us-east-1` | S3 signing region |
 | `S3_ACCESS_KEY_ID` | required | 後端專用 Access Key |
 | `S3_SECRET_ACCESS_KEY` | required | 後端專用 Secret Key |
@@ -81,7 +82,9 @@ docker compose ps
 | `FRONTEND_PORT` | `8080` | 對外 HTTP port |
 | `DATABASE_FILE` | `/app/data/app.sqlite` | 容器內 SQLite 路徑 |
 
-每個帳號的 S3 prefix 由管理員在網頁設定，不再使用全域 root prefix。一般使用者不可使用空白 prefix；管理員的空白 prefix 代表整個 bucket。
+每個帳號的 S3 bucket 與 prefix 由管理員在網頁設定；路徑驗證、列檔及下載均使用該帳號的 bucket。所有 bucket 共用 `.env` 中的 endpoint、region 與金鑰，金鑰必須具備對應 bucket 的存取權限。一般使用者不可使用空白 prefix；管理員的空白 prefix 代表其所設定的整個 bucket。
+
+升級時資料庫會自動新增 bucket 欄位。既有帳號在尚未儲存個別 bucket 設定前，沿用 `.env` 的 `S3_BUCKET`；明確儲存後則固定使用該帳號的設定值。
 
 ## Development
 

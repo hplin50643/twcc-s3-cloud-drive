@@ -97,7 +97,7 @@ function scopedStorage(storage: StorageClient, res: Parameters<typeof currentUse
   if (user.role !== "admin" && !user.s3Prefix) {
     throw new HttpError(403, "S3_SCOPE_NOT_CONFIGURED", "權限設定錯誤，請聯絡管理員。");
   }
-  return new ScopedStorage(storage, user.s3Prefix);
+  return new ScopedStorage(storage, user.s3Prefix, user.s3Bucket);
 }
 
 function mapStorageError(error: unknown, download: boolean, batch = false): unknown {

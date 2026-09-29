@@ -18,7 +18,8 @@ export class ScopedStorage implements StorageClient {
 
   constructor(
     private readonly storage: StorageClient,
-    rootPrefix: string
+    rootPrefix: string,
+    private readonly bucket?: string
   ) {
     this.rootPrefix = normalizeRootPrefix(rootPrefix);
   }
@@ -26,13 +27,15 @@ export class ScopedStorage implements StorageClient {
   async listObjects(input: {
     prefix: string;
     continuationToken?: string;
+    bucket?: string;
   }): Promise<ObjectListResult> {
     const relativePrefix = normalizePrefix(input.prefix);
     assertSafeSegments(relativePrefix);
 
     const result = await this.storage.listObjects({
       prefix: `${this.rootPrefix}${relativePrefix}`,
-      continuationToken: input.continuationToken
+      continuationToken: input.continuationToken,
+      bucket: this.bucket
     });
 
     return {
@@ -50,10 +53,12 @@ export class ScopedStorage implements StorageClient {
   async createDownloadUrl(input: {
     key: string;
     expiresInSeconds: number;
+    bucket?: string;
   }): Promise<string> {
     return this.storage.createDownloadUrl({
       key: this.resolveObjectKey(input.key),
-      expiresInSeconds: input.expiresInSeconds
+      expiresInSeconds: input.expiresInSeconds,
+      bucket: this.bucket
     });
   }
 

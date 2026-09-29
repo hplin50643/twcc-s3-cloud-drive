@@ -9,7 +9,7 @@ dotenv.config();
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const database = new AppDatabase(config.DATABASE_FILE);
+  const database = new AppDatabase(config.DATABASE_FILE, config.S3_BUCKET);
   const storage = new S3Storage(config);
   const app = createApp({
     config,

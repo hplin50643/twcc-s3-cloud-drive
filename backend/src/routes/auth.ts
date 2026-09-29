@@ -77,7 +77,7 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
       const csrfToken = rotateCsrfToken(req);
       await saveSession(req);
       res.json({
-        user: { id: user.id, username: user.username, role: user.role, s3Prefix: user.s3Prefix },
+        user: { id: user.id, username: user.username, role: user.role, s3Bucket: user.s3Bucket, s3Prefix: user.s3Prefix },
         csrfToken
       });
     } catch (error) {

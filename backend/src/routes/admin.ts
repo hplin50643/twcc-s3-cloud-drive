@@ -18,17 +18,21 @@ const usernameSchema = z.string().trim().min(1).max(128).refine(
 const passwordSchema = z.string().min(1);
 const roleSchema = z.enum(["admin", "user"]);
 const noteSchema = z.string().max(1_000);
+const bucketSchema = z.string().trim().min(3).max(63).regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/)
+  .refine((value) => !value.includes("..") && !/^\d+\.\d+\.\d+\.\d+$/.test(value));
 
 const createUserSchema = z.object({
   username: usernameSchema,
   password: passwordSchema,
   role: roleSchema,
+  s3Bucket: z.string().optional(),
   s3Prefix: z.string(),
   note: noteSchema.default("")
 });
-const updateUserSchema = z.object({ role: roleSchema, s3Prefix: z.string(), note: noteSchema.optional() });
+const updateUserSchema = z.object({ role: roleSchema, s3Bucket: z.string().optional(), s3Prefix: z.string(), note: noteSchema.optional() });
 const resetPasswordSchema = z.object({ password: passwordSchema });
-const validatePathSchema = z.object({ s3Prefix: z.string() });
+const validatePathSchema = z.object({ s3Prefix: z.string(), s3Bucket: z.string().optional() });
+const validateBucketSchema = z.object({ s3Bucket: z.string() });
 const auditQuerySchema = z.object({
   cursor: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -39,6 +43,7 @@ interface AdminRouterOptions {
   database: AppDatabase;
   passwordHasher: PasswordHasher;
   storage: StorageAdminClient;
+  defaultS3Bucket: string;
   absoluteTimeoutMs: number;
   cookieName: string;
 }
@@ -48,19 +53,21 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
   router.use(createRequireAuth(options.database, options.absoluteTimeoutMs), requireAdmin);
 
   router.get("/users", (_req, res) => {
-    res.json({ users: options.database.listUsers().map(publicUser) });
+    res.json({ users: options.database.listUsers().map(publicUser), defaultS3Bucket: options.defaultS3Bucket });
   });
 
   router.post("/users", async (req, res, next) => {
     try {
       const body = createUserSchema.safeParse(req.body);
       if (!body.success) throw invalidAccountRequest();
-      const s3Prefix = await validatedPrefix(options.storage, body.data.role, body.data.s3Prefix);
+      const s3Bucket = await validatedBucket(options.storage, body.data.s3Bucket ?? options.defaultS3Bucket);
+      const s3Prefix = await validatedPrefix(options.storage, body.data.role, body.data.s3Prefix, s3Bucket);
       const passwordHash = await options.passwordHasher.hash(body.data.password);
       const user = options.database.createUser({
         username: body.data.username,
         passwordHash,
         role: body.data.role,
+        s3Bucket,
         s3Prefix,
         note: body.data.note
       });
@@ -68,7 +75,7 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
         actor: currentUser(res),
         action: "user.created",
         targetUsername: user.username,
-        details: { role: user.role, s3Prefix: user.s3Prefix, hasNote: user.note.length > 0 },
+        details: { role: user.role, s3Bucket: user.s3Bucket, s3Prefix: user.s3Prefix, hasNote: user.note.length > 0 },
         ipAddress: requestIp(req.ip)
       });
       res.status(201).json({ user: publicUser(user) });
@@ -84,9 +91,10 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
       if (!body.success) throw invalidAccountRequest();
       const existing = options.database.getUserById(id);
       if (!existing) throw new DatabaseDomainError("USER_NOT_FOUND");
-      const s3Prefix = await validatedPrefix(options.storage, body.data.role, body.data.s3Prefix);
+      const s3Bucket = await validatedBucket(options.storage, body.data.s3Bucket ?? existing.s3Bucket);
+      const s3Prefix = await validatedPrefix(options.storage, body.data.role, body.data.s3Prefix, s3Bucket);
       const note = body.data.note ?? existing.note;
-      const result = options.database.updateUserAccess(id, body.data.role, s3Prefix, note);
+      const result = options.database.updateUserAccess(id, body.data.role, s3Prefix, note, body.data.s3Bucket === undefined ? undefined : s3Bucket);
       if (result.roleChanged) options.database.deleteSessionsForUser(id);
       options.database.recordAdminEvent({
         actor: currentUser(res),
@@ -95,6 +103,8 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
         details: {
           previousRole: existing.role,
           role: result.user.role,
+          previousS3Bucket: existing.s3Bucket,
+          s3Bucket: result.user.s3Bucket,
           previousS3Prefix: existing.s3Prefix,
           s3Prefix: result.user.s3Prefix,
           noteChanged: existing.note !== result.user.note
@@ -146,7 +156,7 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
         actor,
         action: "user.deleted",
         targetUsername: deleted.username,
-        details: { role: deleted.role, s3Prefix: deleted.s3Prefix, hadNote: deleted.note.length > 0 },
+        details: { role: deleted.role, s3Bucket: deleted.s3Bucket, s3Prefix: deleted.s3Prefix, hadNote: deleted.note.length > 0 },
         ipAddress: requestIp(req.ip)
       });
       const signedOut = id === actor.id;
@@ -160,13 +170,26 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
     }
   });
 
+  router.post("/s3-buckets/validate", async (req, res, next) => {
+    try {
+      const body = validateBucketSchema.safeParse(req.body);
+      if (!body.success) throw new HttpError(400, "INVALID_S3_BUCKET", "Invalid S3 bucket name.");
+      const s3Bucket = normalizedBucket(body.data.s3Bucket);
+      const exists = await options.storage.bucketExists(s3Bucket);
+      res.json({ s3Bucket, exists });
+    } catch (error) {
+      next(mapAdminError(error));
+    }
+  });
+
   router.post("/s3-paths/validate", async (req, res, next) => {
     try {
       const body = validatePathSchema.safeParse(req.body);
       if (!body.success) throw new HttpError(400, "INVALID_S3_PATH", "Invalid S3 path.");
+      const s3Bucket = await validatedBucket(options.storage, body.data.s3Bucket ?? options.defaultS3Bucket);
       const normalizedPrefix = normalizeRootPrefix(body.data.s3Prefix);
-      const exists = await options.storage.prefixExists(normalizedPrefix);
-      res.json({ normalizedPrefix, exists, wholeBucket: normalizedPrefix === "" });
+      const exists = await options.storage.prefixExists(normalizedPrefix, s3Bucket);
+      res.json({ s3Bucket, normalizedPrefix, exists, wholeBucket: normalizedPrefix === "" });
     } catch (error) {
       next(mapAdminError(error));
     }
@@ -194,7 +217,21 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
   return router;
 }
 
-async function validatedPrefix(storage: StorageAdminClient, role: UserRole, input: string): Promise<string> {
+function normalizedBucket(input: string): string {
+  const parsed = bucketSchema.safeParse(input);
+  if (!parsed.success) throw new HttpError(400, "INVALID_S3_BUCKET", "Invalid S3 bucket name.");
+  return parsed.data;
+}
+
+async function validatedBucket(storage: StorageAdminClient, input: string): Promise<string> {
+  const s3Bucket = normalizedBucket(input);
+  if (!(await storage.bucketExists(s3Bucket))) {
+    throw new HttpError(400, "S3_BUCKET_NOT_FOUND", "The storage bucket does not exist.");
+  }
+  return s3Bucket;
+}
+
+async function validatedPrefix(storage: StorageAdminClient, role: UserRole, input: string, s3Bucket: string): Promise<string> {
   let normalized: string;
   try {
     normalized = normalizeRootPrefix(input);
@@ -204,7 +241,7 @@ async function validatedPrefix(storage: StorageAdminClient, role: UserRole, inpu
   if (role !== "admin" && normalized === "") {
     throw new HttpError(400, "S3_SCOPE_REQUIRED", "A storage path is required for regular users.");
   }
-  if (!(await storage.prefixExists(normalized))) {
+  if (!(await storage.prefixExists(normalized, s3Bucket))) {
     throw new HttpError(400, "S3_PATH_NOT_FOUND", "The storage path does not exist.");
   }
   return normalized;
@@ -215,6 +252,7 @@ function publicUser(user: UserRecord) {
     id: user.id,
     username: user.username,
     role: user.role,
+    s3Bucket: user.s3Bucket,
     s3Prefix: user.s3Prefix,
     note: user.note,
     createdAt: user.createdAt,
@@ -250,6 +288,9 @@ function mapAdminError(error: unknown): unknown {
   }
   if (error instanceof Error && error.message === "S3_PATH_CHECK_FAILED") {
     return new HttpError(502, "S3_PATH_CHECK_FAILED", "Unable to validate the storage path.");
+  }
+  if (error instanceof Error && error.message === "S3_BUCKET_CHECK_FAILED") {
+    return new HttpError(502, "S3_BUCKET_CHECK_FAILED", "Unable to validate the storage bucket. Check storage permissions and connectivity.");
   }
   return error;
 }

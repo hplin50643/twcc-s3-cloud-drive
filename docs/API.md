@@ -30,7 +30,7 @@ POST /auth/change-password
 
 ```json
 {
-  "user": { "id": 1, "username": "alice", "role": "admin", "s3Prefix": "uploads/" },
+  "user": { "id": 1, "username": "alice", "role": "admin", "s3Bucket": "team-storage", "s3Prefix": "uploads/" },
   "csrfToken": "shortened-example"
 }
 ```
@@ -59,6 +59,8 @@ POST /download-urls/batch
 
 批量下載接受 1–20 個 key，正規化後去除重複並維持輸入順序。任何 key 越界或任何 URL 產生失敗時，整批請求失敗。
 
+列檔及下載均使用目前登入帳號設定的 bucket 與 prefix，這些 endpoints 不接受指定其他 bucket。登入與 `GET /auth/me` 回傳的 `user.s3Bucket` 為帳號目前實際使用的 bucket；未儲存個別設定時，回傳 `.env` 的 `S3_BUCKET`。
+
 ## Admin Users
 
 以下 endpoints 需要 `admin`：
@@ -69,8 +71,31 @@ POST   /admin/users
 PATCH  /admin/users/:id
 DELETE /admin/users/:id
 POST   /admin/users/:id/reset-password
+POST   /admin/s3-buckets/validate
 POST   /admin/s3-paths/validate
 ```
+
+`GET /admin/users` 回傳：
+
+```json
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "alice",
+      "role": "admin",
+      "s3Bucket": "team-storage",
+      "s3Prefix": "uploads/",
+      "note": "System owner",
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "updatedAt": "2026-08-01T00:00:00.000Z"
+    }
+  ],
+  "defaultS3Bucket": "default-storage"
+}
+```
+
+每位使用者的 `s3Bucket` 為目前實際使用的值；`defaultS3Bucket` 為 `.env` 的 `S3_BUCKET`，用於新增帳號的預填值。
 
 建立帳號：
 
@@ -79,6 +104,7 @@ POST   /admin/s3-paths/validate
   "username": "bob",
   "password": "example-password",
   "role": "user",
+  "s3Bucket": "finance-storage",
   "s3Prefix": "uploads/bob/",
   "note": "Finance team contact"
 }
@@ -89,6 +115,7 @@ POST   /admin/s3-paths/validate
 ```json
 {
   "role": "user",
+  "s3Bucket": "finance-storage",
   "s3Prefix": "uploads/bob/",
   "note": "Primary finance team contact"
 }
@@ -96,9 +123,44 @@ POST   /admin/s3-paths/validate
 
 `note` 可為空字串，最多 1,000 字元。只有管理員帳號 API 會回傳備註；一般登入狀態與檔案 API 不會回傳。
 
+建立帳號時可省略 `s3Bucket`，使用 `.env` 的 `S3_BUCKET`。更新帳號時省略 `s3Bucket`，保留既有設定。指定時應傳入 bucket 名稱，不能以 endpoint URL 或含有路徑的字串代替。新增及更新都會驗證所選 bucket 與其內的 prefix；一般使用者仍必須設定非空白 prefix。
+
 重設密碼：`{ "password": "new-example" }`。
 
-路徑驗證：`{ "s3Prefix": "uploads/bob/" }`，回傳 normalized prefix、是否存在及是否為 whole bucket。
+Bucket 驗證：
+
+```http
+POST /admin/s3-buckets/validate
+```
+
+```json
+{ "s3Bucket": "finance-storage" }
+```
+
+回傳 `{ "s3Bucket": "finance-storage", "exists": true }`。若 S3 回報 bucket 不存在（`404`），驗證 endpoint 回傳成功 response 且 `exists` 為 `false`；權限不足或其他無法確認的上游錯誤回傳 `502`。
+
+路徑驗證：
+
+```http
+POST /admin/s3-paths/validate
+```
+
+```json
+{ "s3Bucket": "finance-storage", "s3Prefix": "uploads/bob/" }
+```
+
+回傳：
+
+```json
+{
+  "s3Bucket": "finance-storage",
+  "normalizedPrefix": "uploads/bob/",
+  "exists": true,
+  "wholeBucket": false
+}
+```
+
+省略 `s3Bucket` 時使用 `.env` 的 `S3_BUCKET`。空白 prefix 的 `wholeBucket` 為 `true`，但仍需驗證 bucket 是否存在。
 
 ## Admin Audit
 

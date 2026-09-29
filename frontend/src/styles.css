@@ -613,7 +613,8 @@ button.table-row {
   gap: 16px;
 }
 
-.management-form label {
+.management-form label,
+.management-form .storage-field {
   display: grid;
   gap: 7px;
   color: #34434e;

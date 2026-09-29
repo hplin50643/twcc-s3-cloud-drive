@@ -68,7 +68,7 @@ async function main(): Promise<void> {
     throw new Error("Usage: npm run db:init -- --username admin [--s3-prefix uploads/]");
   }
   const config = loadConfig();
-  const database = new AppDatabase(config.DATABASE_FILE);
+  const database = new AppDatabase(config.DATABASE_FILE, config.S3_BUCKET);
   try {
     if (database.countUsers() > 0) {
       throw new Error("The database is already initialized. Manage accounts in the web interface.");

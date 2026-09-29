@@ -51,6 +51,7 @@ function publicUser(user: AppUser): AppUser {
     id: user.id,
     username: user.username,
     role: user.role,
+    s3Bucket: user.s3Bucket,
     s3Prefix: user.s3Prefix
   };
 }

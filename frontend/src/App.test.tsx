@@ -33,7 +33,7 @@ describe("App", () => {
       .mockResolvedValueOnce(csrfResponse())
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: {} }), { status: 401 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        user: { id: 1, username: "alice", role: "admin", s3Prefix: "uploads/" },
+        user: { id: 1, username: "alice", role: "admin", s3Bucket: "default-bucket", s3Prefix: "uploads/" },
         csrfToken: "csrf-authenticated"
       }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -60,7 +60,7 @@ describe("App", () => {
       .mockResolvedValueOnce(csrfResponse())
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: {} }), { status: 401 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        user: { id: 1, username: "alice", role: "admin", s3Prefix: "uploads/" },
+        user: { id: 1, username: "alice", role: "admin", s3Bucket: "default-bucket", s3Prefix: "uploads/" },
         csrfToken: "csrf-authenticated"
       }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({

@@ -14,23 +14,23 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); fetchMock.mockReset(); });
 
 describe("management views", () => {
   it("shows account roles and protects the only administrator delete action", async () => {
-    fetchMock.mockResolvedValueOnce(json({ users: [{ id: 1, username: "alice", role: "admin", s3Prefix: "", note: "System owner", createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z" }] }));
-    render(<AdminUsersView currentUser={{ id: 1, username: "alice", role: "admin", s3Prefix: "" }} onSessionEnded={vi.fn()} />);
+    fetchMock.mockResolvedValueOnce(json({ defaultS3Bucket: "default-bucket", users: [{ id: 1, username: "alice", role: "admin", s3Bucket: "default-bucket", s3Prefix: "", note: "System owner", createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z" }] }));
+    render(<AdminUsersView currentUser={{ id: 1, username: "alice", role: "admin", s3Bucket: "default-bucket", s3Prefix: "" }} onSessionEnded={vi.fn()} />);
     expect(await screen.findByText("整個 bucket")).toBeInTheDocument();
     expect(screen.getByText("System owner")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "刪除 alice" })).toBeDisabled();
   });
 
   it("prefills and updates an account note", async () => {
-    const original = { id: 1, username: "alice", role: "admin", s3Prefix: "", note: "System owner", createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z" };
+    const original = { id: 1, username: "alice", role: "admin", s3Bucket: "default-bucket", s3Prefix: "", note: "System owner", createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z" };
     const updated = { ...original, note: "Infrastructure owner" };
     fetchMock
-      .mockResolvedValueOnce(json({ users: [original] }))
+      .mockResolvedValueOnce(json({ defaultS3Bucket: "default-bucket", users: [original] }))
       .mockResolvedValueOnce(json({ csrfToken: "csrf-test" }))
       .mockResolvedValueOnce(json({ user: updated, signedOut: false }))
-      .mockResolvedValueOnce(json({ users: [updated] }));
+      .mockResolvedValueOnce(json({ defaultS3Bucket: "default-bucket", users: [updated] }));
 
-    render(<AdminUsersView currentUser={{ id: 1, username: "alice", role: "admin", s3Prefix: "" }} onSessionEnded={vi.fn()} />);
+    render(<AdminUsersView currentUser={{ id: 1, username: "alice", role: "admin", s3Bucket: "default-bucket", s3Prefix: "" }} onSessionEnded={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "編輯 alice" }));
     const note = screen.getByLabelText("備註（選填）");
     expect(note).toHaveValue("System owner");

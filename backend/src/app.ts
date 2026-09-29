@@ -25,6 +25,7 @@ type RuntimeConfig = Pick<
   | "LOGIN_RATE_LIMIT_PER_USERNAME"
   | "LOGIN_RATE_LIMIT_PER_IP"
   | "SIGNED_URL_EXPIRES_SECONDS"
+  | "S3_BUCKET"
 >;
 
 interface CreateAppOptions {
@@ -108,6 +109,7 @@ export function createApp(options: CreateAppOptions): express.Express {
       database: options.database,
       passwordHasher: options.passwordHasher,
       storage: options.storage,
+      defaultS3Bucket: options.config.S3_BUCKET,
       absoluteTimeoutMs,
       cookieName: sessionCookieName
     })

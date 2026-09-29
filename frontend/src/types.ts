@@ -2,6 +2,7 @@ export interface User {
   id: number;
   username: string;
   role: "admin" | "user";
+  s3Bucket: string;
   s3Prefix: string;
 }
 

@@ -23,8 +23,13 @@ class MockStorage implements StorageAdminClient {
   downloadError: Error | null = null;
   downloadKeys: string[] = [];
   prefixesChecked: string[] = [];
+  listedBuckets: Array<string | undefined> = [];
+  downloadBuckets: Array<string | undefined> = [];
+  checkedPaths: Array<{ prefix: string; bucket: string | undefined }> = [];
+  bucketsChecked: string[] = [];
 
-  async listObjects(input: { prefix: string; continuationToken?: string }): Promise<ObjectListResult> {
+  async listObjects(input: { prefix: string; continuationToken?: string; bucket?: string }): Promise<ObjectListResult> {
+    this.listedBuckets.push(input.bucket);
     if (this.listError) throw this.listError;
     return {
       prefix: input.prefix,
@@ -39,16 +44,24 @@ class MockStorage implements StorageAdminClient {
     };
   }
 
-  async createDownloadUrl(input: { key: string; expiresInSeconds: number }): Promise<string> {
+  async createDownloadUrl(input: { key: string; expiresInSeconds: number; bucket?: string }): Promise<string> {
     if (this.downloadError) throw this.downloadError;
     this.downloadKeys.push(input.key);
+    this.downloadBuckets.push(input.bucket);
     return `https://storage.example.test/${encodeURIComponent(input.key)}?signature=short`;
   }
 
-  async prefixExists(prefix: string): Promise<boolean> {
+  async bucketExists(bucket: string): Promise<boolean> {
+    this.bucketsChecked.push(bucket);
+    if (bucket === "inaccessible-bucket") throw new Error("S3_BUCKET_CHECK_FAILED");
+    return bucket !== "missing-bucket";
+  }
+
+  async prefixExists(prefix: string, bucket?: string): Promise<boolean> {
     this.prefixesChecked.push(prefix);
+    this.checkedPaths.push({ prefix, bucket });
     if (prefix === "error/") throw new Error("S3_PATH_CHECK_FAILED");
-    return prefix !== "missing/";
+    return prefix !== "missing/" && (prefix !== "exclusive/" || bucket === "other-bucket");
   }
 }
 
@@ -63,7 +76,7 @@ const contexts: TestContext[] = [];
 
 async function createTestContext(overrides: { usernameLimit?: number; ipLimit?: number } = {}): Promise<TestContext> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "twcc-s3-db-"));
-  const database = new AppDatabase(path.join(tempDir, "app.sqlite"));
+  const database = new AppDatabase(path.join(tempDir, "app.sqlite"), "default-bucket");
   const passwordHasher = new FakePasswordHasher();
   database.createUser({ username: "alice", passwordHash: await passwordHasher.hash("password-one"), role: "admin", s3Prefix: "uploads/" });
   database.createUser({ username: "bob", passwordHash: await passwordHasher.hash("password-two"), role: "user", s3Prefix: "clients/bob/" });
@@ -79,7 +92,8 @@ async function createTestContext(overrides: { usernameLimit?: number; ipLimit?: 
       LOGIN_RATE_LIMIT_WINDOW_MINUTES: 15,
       LOGIN_RATE_LIMIT_PER_USERNAME: overrides.usernameLimit ?? 10,
       LOGIN_RATE_LIMIT_PER_IP: overrides.ipLimit ?? 30,
-      SIGNED_URL_EXPIRES_SECONDS: 300
+      SIGNED_URL_EXPIRES_SECONDS: 300,
+      S3_BUCKET: "default-bucket"
     },
     database,
     passwordHasher,
@@ -160,6 +174,35 @@ describe("authentication and sessions", () => {
 });
 
 describe("scoped objects and download audit", () => {
+  it("uses each account's bucket for listing, single and batch downloads and ignores request bucket overrides", async () => {
+    const { app, storage, database } = await createTestContext();
+    const bobUser = database.getUserByUsername("bob")!;
+    database.updateUserAccess(bobUser.id, "user", bobUser.s3Prefix, "", "bob-bucket");
+    const alice = request.agent(app);
+    const bob = request.agent(app);
+    const aliceToken = await login(alice, "alice", "password-one");
+    const bobToken = await login(bob, "bob", "password-two");
+    expect((await bob.get("/api/v1/auth/me")).body.user.s3Bucket).toBe("bob-bucket");
+    const results = await Promise.all([
+      alice.get("/api/v1/objects?s3Bucket=untrusted-bucket&bucket=untrusted-bucket"),
+      bob.get("/api/v1/objects?s3Bucket=untrusted-bucket&bucket=untrusted-bucket")
+    ]);
+    expect(results.every((result) => result.status === 200)).toBe(true);
+    expect(storage.listedBuckets.sort()).toEqual(["bob-bucket", "default-bucket"]);
+    expect((await bob.post("/api/v1/download-urls").set("X-CSRF-Token", bobToken).send({ key: "readme.txt", bucket: "default-bucket", s3Bucket: "default-bucket" })).status).toBe(200);
+    expect((await alice.post("/api/v1/download-urls/batch").set("X-CSRF-Token", aliceToken).send({ keys: ["one.txt", "two.txt"], bucket: "bob-bucket", s3Bucket: "bob-bucket" })).status).toBe(200);
+    expect(storage.downloadBuckets).toEqual(["bob-bucket", "default-bucket", "default-bucket"]);
+
+    const changed = await alice.patch(`/api/v1/admin/users/${bobUser.id}`).set("X-CSRF-Token", aliceToken).send({ role: "user", s3Prefix: "new-scope/", s3Bucket: "changed-bucket" });
+    expect(changed.status).toBe(200);
+    expect((await bob.get("/api/v1/auth/me")).body.user.s3Bucket).toBe("changed-bucket");
+    expect((await bob.get("/api/v1/objects")).status).toBe(200);
+    expect(storage.listedBuckets.at(-1)).toBe("changed-bucket");
+    expect((await bob.post("/api/v1/download-urls").set("X-CSRF-Token", bobToken).send({ key: "readme.txt" })).status).toBe(200);
+    expect(storage.downloadBuckets.at(-1)).toBe("changed-bucket");
+    expect(storage.downloadKeys.at(-1)).toBe("new-scope/readme.txt");
+  });
+
   it("uses the current user's S3 prefix and records issued URLs", async () => {
     const { app, storage, database } = await createTestContext();
     const agent = request.agent(app);
@@ -196,6 +239,85 @@ describe("scoped objects and download audit", () => {
 });
 
 describe("administrator APIs", () => {
+  it("exposes the configured default and saves a distinct bucket per account", async () => {
+    const { app, storage, database } = await createTestContext();
+    const admin = request.agent(app);
+    const token = await login(admin, "alice", "password-one");
+    const users = await admin.get("/api/v1/admin/users");
+    expect(users.body.defaultS3Bucket).toBe("default-bucket");
+    expect(users.body.users.every((user: { s3Bucket: string }) => user.s3Bucket === "default-bucket")).toBe(true);
+
+    const created = await admin.post("/api/v1/admin/users").set("X-CSRF-Token", token).send({
+      username: "carol", password: "pass", role: "user", s3Bucket: " other-bucket ", s3Prefix: "exclusive/"
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.user.s3Bucket).toBe("other-bucket");
+    expect(database.getUserByUsername("carol")?.s3Bucket).toBe("other-bucket");
+    expect(storage.checkedPaths).toContainEqual({ bucket: "other-bucket", prefix: "exclusive/" });
+
+    const edited = await admin.patch(`/api/v1/admin/users/${created.body.user.id}`).set("X-CSRF-Token", token).send({
+      role: "user", s3Prefix: "exclusive/", note: "Retain bucket on older API clients"
+    });
+    expect(edited.status).toBe(200);
+    expect(edited.body.user.s3Bucket).toBe("other-bucket");
+    const actions = database.listAdminEvents({ limit: 10 }).items;
+    expect(actions[0].details).toMatchObject({ previousS3Bucket: "other-bucket", s3Bucket: "other-bucket" });
+    expect(actions[1].details).toMatchObject({ s3Bucket: "other-bucket" });
+  });
+
+  it("checks buckets and paths in the selected bucket, and distinguishes absence from failed checks", async () => {
+    const { app, storage } = await createTestContext();
+    const admin = request.agent(app);
+    const token = await login(admin, "alice", "password-one");
+    const validateBucket = (s3Bucket: unknown) => admin.post("/api/v1/admin/s3-buckets/validate").set("X-CSRF-Token", token).send({ s3Bucket });
+    expect((await validateBucket("other-bucket")).body).toEqual({ s3Bucket: "other-bucket", exists: true });
+    expect((await validateBucket("missing-bucket")).body.exists).toBe(false);
+    const failure = await validateBucket("inaccessible-bucket");
+    expect(failure.status).toBe(502);
+    expect(failure.body.error.code).toBe("S3_BUCKET_CHECK_FAILED");
+    for (const invalid of ["", "../other", "https://other-bucket", "bad bucket", "a..b", 42]) {
+      const result = await validateBucket(invalid);
+      expect(result.status).toBe(400);
+      expect(result.body.error.code).toBe("INVALID_S3_BUCKET");
+    }
+    expect(storage.bucketsChecked).toEqual(["other-bucket", "missing-bucket", "inaccessible-bucket"]);
+
+    const pathInOther = await admin.post("/api/v1/admin/s3-paths/validate").set("X-CSRF-Token", token).send({ s3Bucket: "other-bucket", s3Prefix: "exclusive" });
+    expect(pathInOther.body).toMatchObject({ s3Bucket: "other-bucket", normalizedPrefix: "exclusive/", exists: true });
+    const pathInDefault = await admin.post("/api/v1/admin/s3-paths/validate").set("X-CSRF-Token", token).send({ s3Prefix: "exclusive" });
+    expect(pathInDefault.body).toMatchObject({ s3Bucket: "default-bucket", exists: false });
+    const root = await admin.post("/api/v1/admin/s3-paths/validate").set("X-CSRF-Token", token).send({ s3Bucket: "other-bucket", s3Prefix: "" });
+    expect(root.body).toMatchObject({ exists: true, wholeBucket: true });
+  });
+
+  it("rejects invalid bucket assignments and validates the path again when the bucket changes", async () => {
+    const { app, database } = await createTestContext();
+    const admin = request.agent(app);
+    const token = await login(admin, "alice", "password-one");
+    for (const [s3Bucket, code] of [["", "INVALID_S3_BUCKET"], ["missing-bucket", "S3_BUCKET_NOT_FOUND"], ["inaccessible-bucket", "S3_BUCKET_CHECK_FAILED"]]) {
+      const result = await admin.post("/api/v1/admin/users").set("X-CSRF-Token", token).send({ username: "carol", password: "pass", role: "admin", s3Bucket, s3Prefix: "" });
+      expect(result.body.error.code).toBe(code);
+      expect(database.getUserByUsername("carol")).toBeNull();
+    }
+    const carol = database.createUser({ username: "carol", passwordHash: "test:pass", role: "user", s3Bucket: "other-bucket", s3Prefix: "exclusive/" });
+    const changed = await admin.patch(`/api/v1/admin/users/${carol.id}`).set("X-CSRF-Token", token).send({ role: "user", s3Bucket: "default-bucket", s3Prefix: "exclusive/" });
+    expect(changed.body.error.code).toBe("S3_PATH_NOT_FOUND");
+    expect(database.getUserById(carol.id)?.s3Bucket).toBe("other-bucket");
+  });
+
+  it("protects bucket validation with authentication, administrator access and CSRF", async () => {
+    const { app } = await createTestContext();
+    const anonymous = request.agent(app);
+    const anonymousToken = await csrf(anonymous);
+    expect((await anonymous.post("/api/v1/admin/s3-buckets/validate").set("X-CSRF-Token", anonymousToken).send({ s3Bucket: "other-bucket" })).status).toBe(401);
+    const bob = request.agent(app);
+    const bobToken = await login(bob, "bob", "password-two");
+    expect((await bob.post("/api/v1/admin/s3-buckets/validate").set("X-CSRF-Token", bobToken).send({ s3Bucket: "other-bucket" })).status).toBe(403);
+    const admin = request.agent(app);
+    await login(admin, "alice", "password-one");
+    expect((await admin.post("/api/v1/admin/s3-buckets/validate").send({ s3Bucket: "other-bucket" })).status).toBe(403);
+  });
+
   it("blocks regular users and lets admins create and edit a noted scoped account", async () => {
     const { app, storage, database } = await createTestContext();
     const bob = request.agent(app);
@@ -209,6 +331,7 @@ describe("administrator APIs", () => {
     const valid = await admin.post("/api/v1/admin/users").set("X-CSRF-Token", token).send({ username: "carol", password: "pass", role: "user", s3Prefix: "/clients/carol", note: "Finance contact\nWeekdays only" });
     expect(valid.status).toBe(201);
     expect(valid.body.user.s3Prefix).toBe("clients/carol/");
+    expect(valid.body.user.s3Bucket).toBe("default-bucket");
     expect(valid.body.user.note).toBe("Finance contact\nWeekdays only");
     expect(storage.prefixesChecked).toContain("clients/carol/");
 

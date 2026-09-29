@@ -19,7 +19,9 @@
 
 ## Authorization
 
-Frontend 隱藏管理功能只改善使用體驗，不是安全邊界。Backend 每次請求都查詢目前使用者並驗證角色；所有 S3 key 都在 backend 套用 prefix，拒絕 `.`、`..` 與 scope 外路徑。
+Frontend 隱藏管理功能只改善使用體驗，不是安全邊界。Backend 每次請求都查詢目前使用者並驗證角色；列檔與下載使用該帳號的 bucket，所有 S3 key 都在 backend 套用 prefix，拒絕 `.`、`..` 與 scope 外路徑。一般使用者不能透過檔案 API 指定其他 bucket；只有管理員能設定帳號的 bucket 或驗證 bucket 與路徑。
+
+新增及編輯帳號會驗證所選 bucket 與 prefix。Bucket 驗證只有在 S3 回報不存在時回傳不存在；權限不足、連線失敗及其他上游錯誤回傳驗證失敗，不宣稱 bucket 不存在。各帳號共用部署的 S3 endpoint、region 與 credential，S3 端的權限仍須涵蓋已指派的 bucket。
 
 帳號備註只由管理員端點回傳，不包含在一般使用者的 Session 或登入狀態 response。管理稽核只記錄備註是否變更，不保存備註正文。
 

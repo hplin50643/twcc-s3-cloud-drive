@@ -46,6 +46,12 @@ async function parseResponse<T>(response: Response): Promise<T> {
   } catch {
     // Keep the generic response.
   }
+  const bucketErrors: Record<string, string> = {
+    INVALID_S3_BUCKET: "S3 Bucket 名稱格式不正確。",
+    S3_BUCKET_NOT_FOUND: "S3 Bucket 不存在。",
+    S3_BUCKET_CHECK_FAILED: "無法驗證 S3 Bucket，請確認存取權限或稍後再試。"
+  };
+  message = bucketErrors[code] ?? message;
   throw new ApiError(response.status, code, message);
 }
 
@@ -137,16 +143,16 @@ export async function createBatchDownloadUrls(keys: string[]): Promise<BatchDown
   }));
 }
 
-export async function listUsers(): Promise<AdminUser[]> {
-  return (await parseResponse<{ users: AdminUser[] }>(await apiFetch("/api/v1/admin/users"))).users;
+export async function listUsers(): Promise<{ users: AdminUser[]; defaultS3Bucket: string }> {
+  return parseResponse(await apiFetch("/api/v1/admin/users"));
 }
 
-export async function createUser(input: { username: string; password: string; role: User["role"]; s3Prefix: string; note: string }): Promise<AdminUser> {
+export async function createUser(input: { username: string; password: string; role: User["role"]; s3Bucket?: string; s3Prefix: string; note: string }): Promise<AdminUser> {
   const response = await apiFetch("/api/v1/admin/users", { method: "POST", ...jsonBody(input) });
   return (await parseResponse<{ user: AdminUser }>(response)).user;
 }
 
-export async function updateUser(id: number, input: { role: User["role"]; s3Prefix: string; note: string }): Promise<{ user: AdminUser; signedOut: boolean }> {
+export async function updateUser(id: number, input: { role: User["role"]; s3Bucket: string; s3Prefix: string; note: string }): Promise<{ user: AdminUser; signedOut: boolean }> {
   return parseResponse(await apiFetch(`/api/v1/admin/users/${id}`, { method: "PATCH", ...jsonBody(input) }));
 }
 
@@ -161,10 +167,17 @@ export async function deleteUser(id: number): Promise<{ deleted: boolean; signed
   return parseResponse(await apiFetch(`/api/v1/admin/users/${id}`, { method: "DELETE" }));
 }
 
-export async function validateS3Path(s3Prefix: string): Promise<{ normalizedPrefix: string; exists: boolean; wholeBucket: boolean }> {
+export async function validateS3Bucket(s3Bucket: string): Promise<{ s3Bucket: string; exists: boolean }> {
+  return parseResponse(await apiFetch("/api/v1/admin/s3-buckets/validate", {
+    method: "POST",
+    ...jsonBody({ s3Bucket })
+  }));
+}
+
+export async function validateS3Path(s3Prefix: string, s3Bucket: string): Promise<{ normalizedPrefix: string; exists: boolean; wholeBucket: boolean; s3Bucket: string }> {
   return parseResponse(await apiFetch("/api/v1/admin/s3-paths/validate", {
     method: "POST",
-    ...jsonBody({ s3Prefix })
+    ...jsonBody({ s3Prefix, s3Bucket })
   }));
 }
 

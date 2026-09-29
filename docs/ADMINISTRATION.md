@@ -4,14 +4,14 @@
 
 | Role | File access | Account management | Audit access |
 | --- | --- | --- | --- |
-| `user` | Assigned S3 prefix only | Own password | No |
-| `admin` | Assigned prefix or full bucket | Full | Full |
+| `user` | Assigned S3 bucket and prefix only | Own password | No |
+| `admin` | Assigned prefix or full assigned bucket | Full | Full |
 
 系統永遠必須保留至少一位管理員。最後一位管理員不能刪除自己，也不能把自己降級為一般使用者；有其他管理員時才能進行這些操作。
 
 ## Account Lifecycle
 
-管理員可在「帳號管理」新增帳號、編輯角色、S3 路徑與備註、重設密碼或刪除帳號。帳號名稱不區分大小寫且不可重複。
+管理員可在「帳號管理」新增帳號、編輯角色、S3 bucket、S3 路徑與備註、重設密碼或刪除帳號。帳號名稱不區分大小寫且不可重複。
 
 備註為選填的管理資訊，最多 1,000 字元，建立帳號時即可輸入並可隨時修改。只有管理員可透過帳號管理 API 讀取備註；稽核紀錄只保存備註是否變更，不複製備註正文。
 
@@ -19,18 +19,24 @@
 
 使用者更換自己的密碼，或管理員重設密碼後，該帳號所有裝置的 Session 都會立即失效。
 
-## S3 Paths
+## S3 Buckets And Paths
+
+每個帳號可使用不同的 S3 bucket。新增帳號表單預填 `.env` 的 `S3_BUCKET`；編輯帳號時顯示該帳號目前實際使用的 bucket。既有帳號在尚未儲存個別 bucket 設定前，會沿用 `.env` 的預設值；明確儲存後則使用該帳號的設定值。
+
+輸入 bucket 名稱後，可使用「驗證 bucket」確認是否存在。S3 回報不存在時會顯示不存在；權限不足或連線失敗則顯示無法驗證，不能據此判定 bucket 不存在。Bucket、endpoint、region 與金鑰並非各自一組設定：所有帳號共用 `.env` 的 endpoint、region 與金鑰，因此金鑰必須有權存取各帳號設定的 bucket。
+
+「驗證路徑」使用表單目前選擇的 bucket；新增或儲存帳號時，後端也會驗證 bucket 與路徑。
 
 路徑以 bucket 內的 prefix 表示，例如 `uploads/team-a/`。系統會：
 
 1. 移除前導 `/`、把 `\` 轉成 `/`，並補上結尾 `/`。
 2. 拒絕包含 `.` 或 `..` segment 的路徑。
-3. 使用 `ListObjectsV2` 與 `MaxKeys=1` 驗證 prefix。
-4. 在列檔與簽發下載網址時再次套用該帳號 prefix。
+3. 在所選 bucket 使用 `ListObjectsV2` 與 `MaxKeys=1` 驗證 prefix。
+4. 在列檔與簽發下載網址時再次套用該帳號的 bucket 與 prefix。
 
 一般使用者不可保存空白路徑。若資料庫中出現未設定路徑的一般使用者，檔案頁顯示「權限設定錯誤，請聯絡管理員。」
 
-只有管理員可使用空白路徑，代表整個 bucket。管理員也可設定非空白路徑限制自己。
+只有管理員可使用空白路徑，代表其所設定的整個 bucket。即使路徑空白，也會驗證 bucket。管理員也可設定非空白路徑限制自己。
 
 S3 沒有真正的資料夾。完全空白且沒有 folder marker 的 prefix 無法被驗證為存在，請先放入至少一個 object。
 
@@ -38,13 +44,15 @@ S3 沒有真正的資料夾。完全空白且沒有 folder marker 的 prefix 無
 
 - 登入紀錄：時間、帳號、成功/失敗/限流、來源 IP。
 - 下載紀錄：成功產生 presigned URL 的時間、帳號及實際 object key。
-- 管理操作：新增/刪除帳號、角色或路徑異動、密碼重設及來源 IP。
+- 管理操作：新增/刪除帳號、角色、bucket 或路徑異動、密碼重設及來源 IP。
 
 紀錄由新到舊顯示，可用完整帳號名稱篩選。刪除帳號不會刪除歷史紀錄；紀錄保存 username snapshot。
 
 `AUDIT_RETENTION_DAYS` 預設為 180。Backend 啟動時及每 24 小時清理超期紀錄。
 
 下載紀錄表示後端已成功簽發網址，不表示瀏覽器一定完成傳輸。檔案內容由瀏覽器直接向 S3 下載。
+
+下載紀錄僅保存 object key，未保存 bucket 名稱；不同 bucket 的相同 key 在下載紀錄中無法直接區分。帳號 bucket 設定的變更會保存在管理操作紀錄。
 
 ## Login Protection
 

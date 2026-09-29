@@ -5,6 +5,7 @@ export interface AppUser {
   username: string;
   role: UserRole;
   s3Prefix: string;
+  s3Bucket: string;
 }
 
 export interface FolderItem {
@@ -30,13 +31,16 @@ export interface StorageClient {
   listObjects(input: {
     prefix: string;
     continuationToken?: string;
+    bucket?: string;
   }): Promise<ObjectListResult>;
   createDownloadUrl(input: {
     key: string;
     expiresInSeconds: number;
+    bucket?: string;
   }): Promise<string>;
 }
 
 export interface StorageAdminClient extends StorageClient {
-  prefixExists(prefix: string): Promise<boolean>;
+  prefixExists(prefix: string, bucket?: string): Promise<boolean>;
+  bucketExists(bucket: string): Promise<boolean>;
 }
