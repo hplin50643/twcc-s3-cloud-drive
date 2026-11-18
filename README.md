@@ -35,7 +35,7 @@ S3 Access Key、Secret Key 及 Session secret 只存在部署主機的 `.env`。
 需求：Linux 主機、Docker Engine 與 Docker Compose v2。
 
 ```bash
-git clone https://github.com/root50643/twcc-s3-cloud-drive.git
+git clone https://github.com/hplin50643/twcc-s3-cloud-drive.git
 cd twcc-s3-cloud-drive
 cp .env.example .env
 mkdir -p data
